@@ -301,8 +301,13 @@ def _start_bh_daemon(*, stop_existing: bool = True) -> bool:
         stderr=subprocess.DEVNULL,
         **spawn_kwargs,
     )
-    deadline = time.time() + 15
-    while time.time() < deadline:
+    # Allow the harness's 30-second discovery and 45-second handshake budgets,
+    # plus startup overhead, rather than killing it halfway through discovery.
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            print(f"error: harness process exited with code {proc.returncode}", file=sys.stderr)
+            break
         if _bh_daemon_alive():
             # Persist a PID plus OS-issued start identity. PID alone can be
             # reused, so run-time recovery rejects a daemon unless both match.
