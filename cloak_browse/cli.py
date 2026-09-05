@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from collections.abc import Callable, Sequence
 
 from ._version import __version__
@@ -17,7 +18,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command")
 
-    start = commands.add_parser("start", help="Launch stealth browser + harness")
+    start = commands.add_parser(
+        "start",
+        help="Own the browser in the foreground, or use --background",
+        description=(
+            "Stay running as the browser owner. "
+            "Use --background to return after readiness."
+        ),
+    )
+    start.add_argument(
+        "--background",
+        action="store_true",
+        help="Detach the owner and return only after browser and harness readiness",
+    )
+    start.add_argument(
+        "--startup-timeout",
+        type=_positive_float,
+        default=120.0,
+        help="Background readiness deadline in seconds (default: 120)",
+    )
     start.add_argument("--proxy", help="Proxy URL (http://user:pass@host:port)")
     start.add_argument("--profile", help="Persistent profile directory path")
     start.add_argument(
@@ -69,15 +88,18 @@ def main(
         return 2
     runtime = runtime_factory()
     if args.command == "start":
-        return runtime.start(
-            StartOptions(
-                proxy=args.proxy,
-                profile=args.profile,
-                headless=args.headless,
-                humanize=args.humanize,
-                backend=args.backend,
-            )
+        options = StartOptions(
+            proxy=args.proxy,
+            profile=args.profile,
+            headless=args.headless,
+            humanize=args.humanize,
+            backend=args.backend,
         )
+        if args.background:
+            from .background import start_background
+
+            return start_background(options, runtime.paths, args.startup_timeout)
+        return runtime.start(options)
     if args.command == "run":
         return runtime.run(args.code, args.timeout)
     if args.command == "stop":
@@ -89,7 +111,7 @@ def main(
 
 def _positive_float(value: str) -> float:
     number = float(value)
-    if number <= 0:
+    if not math.isfinite(number) or number <= 0:
         raise argparse.ArgumentTypeError("timeout must be greater than zero")
     return number
 

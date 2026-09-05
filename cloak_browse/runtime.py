@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from .browser import BrowserHandle, BrowserLauncher, BrowserOptions
 from .cdp import CdpClient, CdpSnapshot
@@ -110,7 +110,9 @@ class CloakBrowseRuntime:
         timestamp = self._timestamp()
         session = SessionRecord(
             schema_version=SESSION_SCHEMA_VERSION,
-            session_id=str(uuid4()),
+            session_id=str(UUID(os.environ["CLOAK_BROWSE_LAUNCH_ID"]))
+            if os.environ.get("CLOAK_BROWSE_LAUNCH_ID")
+            else str(uuid4()),
             phase="starting",
             owner_pid=os.getpid(),
             owner_started=owner_started,

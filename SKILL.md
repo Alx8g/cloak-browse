@@ -10,12 +10,14 @@ CloakBrowse runs one local managed browser on `127.0.0.1:9333` and one isolated 
 ## Start and inspect
 
 ```bash
-cloak-browse start
-cloak-browse start --headless
+cloak-browse start --background
+cloak-browse start --background --headless
 cloak-browse status --json
 ```
 
-`start` stays in the foreground because it owns the browser handle. Leave it running while issuing commands from another shell.
+Use `start --background` in agent shells. It returns after browser and harness readiness and retains startup logs under the cache directory. Set `--startup-timeout` above the expected first-download duration. A timeout returns `124` and requests shutdown. Inspect status before retrying.
+
+Without `--background`, `start` stays in the foreground because it owns the browser handle. Do not put that form under a short command timeout. Leave it running in a separate managed shell.
 
 Before starting, inspect `cloak-browse status --json`. Do not start when `state` is `foreign_endpoint`, `orphaned`, or `degraded`. Resolve the reported condition first.
 
