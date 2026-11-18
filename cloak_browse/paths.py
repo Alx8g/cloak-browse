@@ -24,7 +24,10 @@ class AppPaths:
 
     def harness(self, session_id: str) -> HarnessPaths:
         runtime_root = Path("/tmp") if os.name != "nt" else Path(tempfile.gettempdir())
-        runtime_dir = runtime_root / "cloak-browse" / session_id
+        runtime_name = (
+            f"cloak-browse-{os.getuid()}" if os.name != "nt" else "cloak-browse"
+        )
+        runtime_dir = runtime_root / runtime_name / session_id
         private_dir = self.cache_dir / "harness" / session_id
         return HarnessPaths(
             runtime_dir=runtime_dir,
