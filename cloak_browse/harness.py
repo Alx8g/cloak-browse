@@ -111,6 +111,7 @@ class HarnessManager:
                 command,
                 input=code,
                 text=True,
+                encoding="utf-8",
                 env=environment,
                 timeout=timeout,
                 check=False,
@@ -184,6 +185,7 @@ class HarnessManager:
             "timeout": timeout,
             "check": False,
             "text": True,
+            "encoding": "utf-8",
         }
         if capture:
             options["stdout"] = subprocess.PIPE

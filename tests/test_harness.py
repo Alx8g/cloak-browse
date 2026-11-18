@@ -188,6 +188,7 @@ def test_execute_propagates_exit_code(app_paths, session_record):
     command, kwargs = runner.calls[1]
     assert command[-2:] == ["-m", "cloak_browse.worker"]
     assert kwargs["input"] == "raise SystemExit(7)"
+    assert kwargs["encoding"] == "utf-8"
     assert kwargs["env"]["BH_REQUIRE_EXISTING_DAEMON"] == "1"
 
 
