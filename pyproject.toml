@@ -15,9 +15,8 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: Browsers",
 ]
 dependencies = [
-    "cloakbrowser>=0.3.20",
-    "patchright",
-    "browser-harness @ git+https://github.com/browser-use/browser-harness.git",
+    "cloakbrowser>=0.5.9",
+    "browser-harness>=0.1.10",
 ]
 
 [project.urls]
