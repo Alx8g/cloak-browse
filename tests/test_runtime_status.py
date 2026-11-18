@@ -92,6 +92,15 @@ def test_json_status_is_exactly_one_json_value_when_stopped(app_paths):
     assert stderr.getvalue() == ""
 
 
+def test_invalid_utf8_status_stays_machine_readable(app_paths):
+    app_paths.session_file.write_bytes(b"\xff")
+    runtime, stdout, stderr = make_runtime(app_paths, snapshot())
+    assert runtime.status(json_output=True) == 1
+    report = json.loads(stdout.getvalue())
+    assert report["state"] == "invalid_session"
+    assert "invalid session file" in stderr.getvalue()
+
+
 def test_corrupt_status_stays_machine_readable_and_uses_stderr(app_paths):
     app_paths.session_file.write_text("{", encoding="utf-8")
     runtime, stdout, stderr = make_runtime(app_paths, snapshot())

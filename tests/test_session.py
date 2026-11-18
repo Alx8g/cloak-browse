@@ -11,6 +11,17 @@ def test_missing_session_is_normal(app_paths):
     assert SessionStore(app_paths).load().error is None
 
 
+def test_invalid_utf8_is_reported_and_can_be_quarantined(app_paths):
+    app_paths.session_file.write_bytes(b"\xff")
+    store = SessionStore(app_paths)
+    read = store.load()
+    assert read.record is None
+    assert "invalid session file" in read.error
+    target = store.quarantine()
+    assert target.read_bytes() == b"\xff"
+    assert store.load().error is None
+
+
 def test_corrupt_and_partial_sessions_are_reported(app_paths, session_record):
     app_paths.session_file.write_text("{", encoding="utf-8")
     assert "invalid session file" in SessionStore(app_paths).load().error

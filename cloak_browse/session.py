@@ -34,6 +34,8 @@ class SessionStore:
             raw = self.paths.session_file.read_text(encoding="utf-8")
         except FileNotFoundError:
             return SessionRead(None, None)
+        except UnicodeDecodeError as exc:
+            return SessionRead(None, f"invalid session file: {exc}")
         except OSError as exc:
             return SessionRead(None, f"cannot read session file: {exc}")
         try:
