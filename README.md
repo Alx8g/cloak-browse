@@ -35,7 +35,15 @@ uv run python scripts/check_dist.py
 
 ## Commands
 
-Start one managed browser session in the foreground:
+For agent shells, detach the browser owner and wait for verified readiness:
+
+```bash
+cloak-browse start --background --headless --startup-timeout 120
+```
+
+This returns only after the browser and harness reach the running phase. Startup output is retained in a unique log under the cache directory. A failed child exits with an error. A readiness timeout returns `124` and requests shutdown of the recorded child session. Inspect status before retrying because shutdown may still be in progress. The first binary download may need a longer startup timeout.
+
+Without `--background`, start owns the browser in the foreground. Do not run this form under a short command timeout:
 
 ```bash
 cloak-browse start
@@ -66,7 +74,7 @@ cloak-browse stop
 
 CloakBrowse supports one local managed session. It binds CDP to `127.0.0.1:9333` and uses the browser-harness daemon name `cloak` inside a per-session private runtime directory.
 
-The `start` process owns the live CloakBrowser object and remains in the foreground. Session state records the owner process identity, a session UUID, and the browser UUID exposed by the CDP WebSocket URL. `stop` writes a private, session-scoped shutdown request. The foreground owner receives that request and closes the daemon and browser through their supported APIs.
+The `start` process owns the live CloakBrowser object. It remains in the foreground unless `--background` launches an independent owner process. Session state records the owner process identity, a session UUID, and the browser UUID exposed by the CDP WebSocket URL. `stop` writes a private, session-scoped shutdown request. The foreground owner receives that request and closes the daemon and browser through their supported APIs.
 
 CloakBrowse never sends a signal to a PID read from a stale file. If the `start` process crashes and its browser remains alive, the state becomes `orphaned`; close that browser manually. This narrower contract prevents PID reuse from terminating an unrelated process.
 
