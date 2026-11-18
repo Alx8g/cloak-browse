@@ -68,7 +68,7 @@ cloak-browse status --json
 cloak-browse stop
 ```
 
-`run` executes the supplied Python with your user permissions. It is not a sandbox. Do not pass untrusted text as code. A timeout terminates the runner subprocess and exits with code `124`; it does not leave a Python thread executing in the caller.
+`run` executes the supplied Python with your user permissions. It is not a sandbox. Do not pass untrusted text as code. A timeout (at most 300 seconds) terminates the runner subprocess and exits with code `124`; it does not leave a Python thread executing in the caller. Runs hold an exclusive session lease, waiting up to `--lock-timeout` seconds (default 15, range 1–60); contention exits with code `75`. Before execution, an unhealthy harness is recycled only after its recorded PID and process-start identity match. After a timeout, CloakBrowse attempts CDP execution cancellation and the same verified recovery, without replaying user code.
 
 ## Lifecycle and ownership
 

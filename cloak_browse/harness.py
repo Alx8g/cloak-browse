@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -55,21 +57,11 @@ class HarnessManager:
             return HarnessState(False, None)
         return HarnessState(False, self._result_error(result, session))
 
-    def start(self, session: SessionRecord, timeout: float = 15.0) -> HarnessResult:
+    def start(self, session: SessionRecord, timeout: float = 90.0) -> HarnessResult:
         script = (
             "import os\n"
-            "from browser_harness.admin import ensure_daemon\n"
-            "ensure_daemon("
-            "wait=float(os.environ['CLOAK_BROWSE_HARNESS_WAIT']), "
-            "name=os.environ['BU_NAME'], "
-            "env={"
-            "'BU_NAME': os.environ['BU_NAME'], "
-            "'BU_CDP_URL': os.environ['BU_CDP_URL'], "
-            "'BH_RUNTIME_DIR': os.environ['BH_RUNTIME_DIR'], "
-            "'BH_TMP_DIR': os.environ['BH_TMP_DIR'], "
-            "'BH_CONFIG_DIR': os.environ['BH_CONFIG_DIR'], "
-            "'BH_UPDATE_CHECK': '0'"
-            "})\n"
+            "from cloak_browse.harness import _start_daemon\n"
+            "_start_daemon(float(os.environ['CLOAK_BROWSE_HARNESS_WAIT']))\n"
         )
         extra = {"CLOAK_BROWSE_HARNESS_WAIT": str(timeout)}
         try:
@@ -107,7 +99,11 @@ class HarnessManager:
         code: str,
         timeout: float | None,
     ) -> int:
-        command = [sys.executable, "-m", "browser_harness.run"]
+        prepared = self._prepare_execution(session)
+        if not prepared.ok:
+            print(f"error: harness recovery refused: {prepared.error}", file=sys.stderr)
+            return 1
+        command = [sys.executable, "-m", "cloak_browse.worker"]
         environment = self._environment(session)
         environment["BH_REQUIRE_EXISTING_DAEMON"] = "1"
         try:
@@ -120,8 +116,39 @@ class HarnessManager:
                 check=False,
             )
         except subprocess.TimeoutExpired:
+            recovered = self._prepare_execution(session, cancel_execution=True)
+            if not recovered.ok:
+                print(
+                    f"error: harness recovery failed: {recovered.error}",
+                    file=sys.stderr,
+                )
             return 124
         return int(result.returncode)
+
+    def _prepare_execution(
+        self,
+        session: SessionRecord,
+        cancel_execution: bool = False,
+        allow_recovery: bool = True,
+    ) -> HarnessResult:
+        script = (
+            "from cloak_browse.harness import _prepare_daemon\n"
+            f"_prepare_daemon(cancel_execution={cancel_execution!r})\n"
+        )
+        try:
+            result = self._run(script, session, timeout=40, capture=True)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return HarnessResult(False, _brief_error(exc))
+        if result.returncode != 0:
+            return HarnessResult(False, self._result_error(result, session))
+        if result.stdout.strip() == "restart":
+            if not allow_recovery:
+                return HarnessResult(False, "restarted daemon is not CDP-healthy")
+            started = self.start(session)
+            if not started.ok:
+                return started
+            return self._prepare_execution(session, allow_recovery=False)
+        return HarnessResult(True, None)
 
     def cleanup(self, session: SessionRecord) -> None:
         harness_paths = self.paths.harness(session.session_id)
@@ -193,7 +220,118 @@ class HarnessManager:
         return " | ".join(values)[:1200] or f"process exited {result.returncode}"
 
 
-def _stop_daemon() -> None:
+def _start_daemon(timeout: float) -> None:
+    from browser_harness import _ipc as ipc
+
+    name = os.environ["BU_NAME"]
+    if ipc.ping(name, timeout=1.0):
+        raise RuntimeError("refusing to replace an existing daemon")
+    with Path(ipc.log_path(name)).open("ab") as log:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "browser_harness.daemon"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=log,
+            **ipc.spawn_kwargs(),
+        )
+    ready = False
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError(
+                    f"harness process exited with code {process.returncode}"
+                )
+            if ipc.ping(name, timeout=1.0):
+                _record_daemon_identity()
+                ready = True
+                return
+            time.sleep(0.1)
+        raise RuntimeError(f"harness startup timed out after {timeout:g}s")
+    finally:
+        if not ready:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+            else:
+                process.wait()
+
+
+def _identity_path() -> Path:
+    return Path(os.environ["BH_CONFIG_DIR"]) / "daemon-identity.json"
+
+
+def _record_daemon_identity() -> None:
+    from browser_harness import _ipc as ipc
+
+    pid = ipc.identify(os.environ["BU_NAME"], timeout=2.0)
+    started = process_start_token(pid) if type(pid) is int else None
+    if started is None:
+        raise RuntimeError("cannot establish daemon process identity")
+    _identity_path().write_text(json.dumps([pid, started]), encoding="utf-8")
+
+
+def _prepare_daemon(cancel_execution: bool = False) -> None:
+    from browser_harness import _ipc as ipc
+
+    name = os.environ["BU_NAME"]
+    connection = None
+    healthy = False
+    try:
+        connection, token = ipc.connect(name, timeout=2.0)
+        response = ipc.request(connection, token, {"meta": "connection_status"})
+        healthy = (
+            isinstance(response, dict)
+            and "error" not in response
+            and isinstance(response.get("target_id"), str)
+            and isinstance(response.get("page"), (dict, type(None)))
+        )
+    except (OSError, ValueError):
+        pass
+    finally:
+        if connection is not None:
+            connection.close()
+    if healthy and not cancel_execution:
+        return
+    expected_pid, expected_started = json.loads(
+        _identity_path().read_text(encoding="utf-8")
+    )
+    pid = ipc.identify(name, timeout=2.0)
+    if (
+        type(pid) is not int
+        or pid != expected_pid
+        or process_start_token(pid) != expected_started
+    ):
+        raise RuntimeError("daemon PID/start identity does not match this session")
+    if cancel_execution:
+        connection = None
+        try:
+            connection, token = ipc.connect(name, timeout=2.0)
+            ipc.request(
+                connection,
+                token,
+                {
+                    "method": "Runtime.terminateExecution",
+                    "params": {},
+                    "session_id": None,
+                },
+            )
+        except (OSError, ValueError):
+            pass
+        finally:
+            if connection is not None:
+                connection.close()
+    _stop_daemon(force=True, expected_identity=(expected_pid, expected_started))
+    print("restart")
+
+
+def _stop_daemon(
+    force: bool = False, expected_identity: tuple[int, str] | None = None
+) -> None:
     from browser_harness import _ipc as ipc
 
     name = os.environ["BU_NAME"]
@@ -208,11 +346,21 @@ def _stop_daemon() -> None:
     daemon_started = process_start_token(daemon_pid)
     if daemon_started is None:
         raise RuntimeError(f"cannot establish process identity for daemon {name!r}")
+    if (
+        expected_identity is not None
+        and (daemon_pid, daemon_started) != expected_identity
+    ):
+        raise RuntimeError("daemon identity changed before shutdown")
 
     connection = None
     try:
         connection, token = ipc.connect(name, timeout=3.0)
-        response = ipc.request(connection, token, {"meta": "shutdown"})
+        try:
+            response = ipc.request(connection, token, {"meta": "shutdown"})
+        except (OSError, ValueError):
+            if not force:
+                raise
+            response = {"ok": True}
     finally:
         if connection is not None:
             with contextlib.suppress(OSError):
@@ -236,7 +384,14 @@ def _stop_daemon() -> None:
             )
         time.sleep(0.1)
     else:
-        raise RuntimeError(f"daemon {name!r} did not exit after shutdown")
+        if not force or process_start_token(daemon_pid) != daemon_started:
+            raise RuntimeError(f"daemon {name!r} did not exit after shutdown")
+        os.kill(daemon_pid, signal.SIGTERM)
+        deadline = time.monotonic() + 2.0
+        while process_start_token(daemon_pid) == daemon_started:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"daemon {name!r} survived termination")
+            time.sleep(0.1)
 
     replacement = ipc.identify(name, timeout=0.2)
     if replacement is not None:

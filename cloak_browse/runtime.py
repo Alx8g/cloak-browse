@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 from .browser import BrowserHandle, BrowserLauncher, BrowserOptions
 from .cdp import CdpClient, CdpSnapshot
 from .harness import HarnessManager, HarnessState
+from .lease import AdvisoryRunLease, RunLeaseTimeout
 from .models import SESSION_SCHEMA_VERSION, SessionRecord
 from .paths import AppPaths, app_paths
 from .process_identity import process_start_token, same_process
@@ -174,7 +175,7 @@ class CloakBrowseRuntime:
             )
             self.store.write(session)
             print("starting browser-harness daemon...", file=self.stdout)
-            daemon_start = harness.start(session, timeout=15.0)
+            daemon_start = harness.start(session, timeout=90.0)
             if not daemon_start.ok:
                 raise RuntimeError(
                     f"browser-harness daemon did not start: {daemon_start.error}"
@@ -197,7 +198,15 @@ class CloakBrowseRuntime:
                 result = shutdown_result
         return result
 
-    def run(self, code: str, timeout: float | None) -> int:
+    def run(self, code: str, timeout: float | None, lock_timeout: float = 15.0) -> int:
+        try:
+            with AdvisoryRunLease(self.paths.cache_dir / "run.lock", lock_timeout):
+                return self._run_locked(code, timeout)
+        except RunLeaseTimeout as exc:
+            self._error(f"run lease unavailable: {exc}")
+            return 75
+
+    def _run_locked(self, code: str, timeout: float | None) -> int:
         read = self.store.load()
         if read.error:
             self._error(read.error)
@@ -236,7 +245,7 @@ class CloakBrowseRuntime:
             if daemon.error:
                 self._diagnostic(f"daemon probe failed: {daemon.error}")
             print("harness daemon not running, starting...", file=self.stderr)
-            started = harness.start(session, timeout=15.0)
+            started = harness.start(session, timeout=90.0)
             if not started.ok:
                 self._error(f"cannot start browser-harness daemon: {started.error}")
                 return 1

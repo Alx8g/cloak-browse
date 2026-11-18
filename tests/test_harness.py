@@ -181,17 +181,19 @@ def test_stop_worker_rejects_pid_reuse(monkeypatch, tmp_path):
 
 
 def test_execute_propagates_exit_code(app_paths, session_record):
-    runner = Runner([completed(7)])
+    runner = Runner([completed(0), completed(7)])
     manager = HarnessManager(app_paths, runner=runner, environment={})
     assert manager.execute(session_record, "raise SystemExit(7)", None) == 7
-    command, kwargs = runner.calls[0]
-    assert command[-2:] == ["-m", "browser_harness.run"]
+    command, kwargs = runner.calls[1]
+    assert command[-2:] == ["-m", "cloak_browse.worker"]
     assert kwargs["input"] == "raise SystemExit(7)"
     assert kwargs["env"]["BH_REQUIRE_EXISTING_DAEMON"] == "1"
 
 
 def test_execute_timeout_returns_standard_timeout_code(app_paths, session_record):
-    runner = Runner([subprocess.TimeoutExpired(["python"], 2)])
+    runner = Runner(
+        [completed(0), subprocess.TimeoutExpired(["python"], 2), completed(0)]
+    )
     manager = HarnessManager(app_paths, runner=runner, environment={})
     assert manager.execute(session_record, "while True: pass", 2) == 124
 

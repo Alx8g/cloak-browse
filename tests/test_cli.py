@@ -13,7 +13,7 @@ class FakeRuntime:
         self.calls.append(("start", options))
         return 11
 
-    def run(self, code, timeout):
+    def run(self, code, timeout, lock_timeout=15.0):
         self.calls.append(("run", code, timeout))
         return 12
 
