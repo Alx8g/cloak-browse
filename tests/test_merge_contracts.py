@@ -30,6 +30,7 @@ def test_utf8_output_accepts_streams_without_reconfigure(monkeypatch):
 
 
 def test_worker_configures_utf8_before_executing_code(monkeypatch):
+    monkeypatch.setenv("BH_TELEMETRY", "1")
     calls = []
     monkeypatch.setattr(worker, "force_utf8_output", lambda: calls.append("utf8"))
     monkeypatch.setattr(
@@ -38,6 +39,7 @@ def test_worker_configures_utf8_before_executing_code(monkeypatch):
     monkeypatch.setattr(worker.runpy, "run_module", lambda *a, **k: calls.append("run"))
     worker.main()
     assert calls == ["utf8", "helpers", "run"]
+    assert worker.os.environ["BH_TELEMETRY"] == "0"
 
 
 def test_session_lease_is_exclusive_and_released(tmp_path):

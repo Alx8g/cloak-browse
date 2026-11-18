@@ -73,6 +73,7 @@ def test_alive_uses_isolated_session_environment(app_paths, session_record):
     assert env["BU_CDP_URL"] == "http://127.0.0.1:9333"
     assert session_record.session_id in env["BH_RUNTIME_DIR"]
     assert session_record.session_id in env["BH_TMP_DIR"]
+    assert env["BH_TELEMETRY"] == "0"
 
 
 def test_alive_false_and_probe_error(app_paths, session_record):

@@ -206,6 +206,7 @@ class HarnessManager:
             "BH_TMP_DIR": str(harness_paths.tmp_dir),
             "BH_CONFIG_DIR": str(harness_paths.config_dir),
             "BH_UPDATE_CHECK": "0",
+            "BH_TELEMETRY": "0",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
         }

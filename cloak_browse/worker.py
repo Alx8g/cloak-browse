@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import runpy
 import sys
 import time
@@ -253,6 +254,7 @@ def _apply_helper_fixes(h: Any) -> None:
 
 
 def main() -> None:
+    os.environ["BH_TELEMETRY"] = "0"
     force_utf8_output()
     import browser_harness.helpers as helpers
 
