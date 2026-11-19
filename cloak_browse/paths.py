@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import stat
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -55,4 +57,23 @@ def ensure_private_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     if os.name != "nt":
         os.chmod(path, 0o700)
+    return path
+
+
+def ensure_runtime_dir(path: Path) -> Path:
+    if os.name == "nt":
+        return ensure_private_dir(path)
+    for directory in (path.parent, path):
+        with contextlib.suppress(FileExistsError):
+            directory.mkdir(mode=0o700)
+        info = directory.lstat()
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o022
+        ):
+            raise PermissionError(
+                f"unsafe runtime directory {directory}: must be a real directory "
+                "owned by the current user and not group/world-writable"
+            )
     return path

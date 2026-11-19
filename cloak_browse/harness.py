@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import SessionRecord
-from .paths import AppPaths, ensure_private_dir
+from .paths import AppPaths, ensure_private_dir, ensure_runtime_dir
 from .process_identity import process_start_token
 
 
@@ -194,8 +194,8 @@ class HarnessManager:
 
     def _environment(self, session: SessionRecord) -> dict[str, str]:
         harness_paths = self.paths.harness(session.session_id)
+        ensure_runtime_dir(harness_paths.runtime_dir)
         for path in (
-            harness_paths.runtime_dir,
             harness_paths.tmp_dir,
             harness_paths.config_dir,
         ):
