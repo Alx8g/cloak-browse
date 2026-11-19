@@ -4,128 +4,177 @@
 
 <h1 align="center">cloak-browse</h1>
 
-<p align="center">
-  Stealth browser CLI — <a href="https://github.com/CloakHQ/CloakBrowser">CloakBrowser</a> + <a href="https://github.com/browser-use/browser-harness">browser-harness</a> wired together.
-</p>
+<p align="center">A small CLI that launches CloakBrowser and exposes it through browser-harness.</p>
 
-<p align="center">
-  Launch a fingerprint-patched Chromium and control it from the terminal.<br>
-  Headed or headless. Stealth in both modes.
-</p>
+Current package version: `0.2.1` (unreleased patch).
 
----
+## Supported environment
 
-## What this does
+CloakBrowse requires Python 3.11 through 3.13. The fast test and package smoke suite runs on Linux, macOS, and Windows. A separate Linux integration job downloads the CloakBrowser Chromium build and exercises the real browser path once, rather than downloading the large binary in every matrix job.
 
-CloakBrowser ships a **patched Chromium binary** with anti-detection built into the C++ source — not injected via JavaScript. Fingerprint seeds randomize canvas, WebGL, audio, and fonts per launch. `navigator.webdriver` is suppressed at the binary level.
-
-browser-harness gives you **CDP control from the command line** — navigate, click, screenshot, extract text, run arbitrary JS.
-
-cloak-browse wires them together: one command launches the stealth browser with a CDP port exposed, starts the harness daemon, and you're ready to go.
+The first browser launch downloads roughly 150–200 MB. The package does not bundle Chromium.
 
 ## Install
 
-One command. Works on macOS, Linux, and Windows. The stealth Chromium binary downloads automatically on first run (~150MB).
-
 ```bash
-# macOS / Linux
 uv tool install git+https://github.com/vincenthopf/cloak-browse.git
-
-# Windows (PowerShell)
-uv tool install git+https://github.com/vincenthopf/cloak-browse.git
-
-# pipx (any platform)
-pipx install git+https://github.com/vincenthopf/cloak-browse.git
+cloak-browse --version
 ```
 
-That's it. Run `cloak-browse start` and the browser launches.
-
-> **Need uv?** `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"` (Windows)
-
-## Usage
-
-**Start the stealth browser** (new terminal, stays running):
+For repository development:
 
 ```bash
-cloak-browse start              # headed — watch it work
-cloak-browse start --headless   # headless — stealth patches still active
+uv sync --frozen
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+uv build
+uv run python scripts/check_dist.py
 ```
 
-**Run commands against it** (from any other terminal):
+## Commands
+
+For agent shells, detach the browser owner and wait for verified readiness:
 
 ```bash
-cloak-browse run "new_tab('https://bot.incolumitas.com')"
+cloak-browse start --background --headless --startup-timeout 120
+```
+
+This returns only after the browser and harness reach the running phase. Startup output is retained in a unique log under the cache directory. A failed child exits with an error. A readiness timeout returns `124` and requests shutdown of the recorded child session. Inspect status before retrying because shutdown may still be in progress. The first binary download may need a longer startup timeout.
+
+Without `--background`, start owns the browser in the foreground. Do not run this form under a short command timeout:
+
+```bash
+cloak-browse start
+cloak-browse start --headless
+cloak-browse start --profile ~/.local/share/cloak-profile
+cloak-browse start --proxy http://user:pass@proxy.example:8080
+```
+
+Run trusted Python through browser-harness:
+
+```bash
+cloak-browse run "new_tab('https://example.com')"
 cloak-browse run "print(page_info())"
-cloak-browse run "print(visible_text()[:2000])"
-cloak-browse run "capture_screenshot('/tmp/shot.png')"
+cloak-browse run "print(js('document.body.innerText')[:2000])" --timeout 30
 ```
 
-**Check status / stop:**
+Inspect or stop the managed session:
 
 ```bash
 cloak-browse status
-cloak-browse stop       # stops harness daemon
-                        # ctrl+c the start process to close the browser
+cloak-browse status --json
+cloak-browse stop
 ```
 
-## Options
+`run` executes the supplied Python with your user permissions. It is not a sandbox. Do not pass untrusted text as code. A timeout (at most 300 seconds) terminates the runner subprocess and exits with code `124`; it does not leave a Python thread executing in the caller. Runs hold an exclusive session lease, waiting up to `--lock-timeout` seconds (default 15, range 1–60); contention exits with code `75`. Before execution, an unhealthy harness is recycled only after its recorded PID and process-start identity match. After a timeout, CloakBrowse attempts CDP execution cancellation and the same verified recovery, without replaying user code.
 
-| Flag | What it does |
-|---|---|
-| `--headless` | No visible window. Same stealth patches. |
-| `--proxy URL` | Route through a proxy (`http://user:pass@host:port`) |
-| `--profile DIR` | Persist cookies/localStorage across sessions |
-| `--humanize` | Human-like mouse movement and keyboard timing |
+## Lifecycle and ownership
 
-## How it works
+CloakBrowse supports one local managed session. It binds CDP to `127.0.0.1:9333` and uses the browser-harness daemon name `cloak` inside a per-session private runtime directory.
 
+The `start` process owns the live CloakBrowser object. It remains in the foreground unless `--background` launches an independent owner process. Session state records the owner process identity, a session UUID, and the browser UUID exposed by the CDP WebSocket URL. `stop` writes a private, session-scoped shutdown request. The foreground owner receives that request and closes the daemon and browser through their supported APIs.
+
+CloakBrowse never sends a signal to a PID read from a stale file. If the `start` process crashes and its browser remains alive, the state becomes `orphaned`; close that browser manually. This narrower contract prevents PID reuse from terminating an unrelated process.
+
+CloakBrowse refuses to start when any listener already owns port `9333`. It does not assume that an arbitrary CDP-compatible endpoint is its browser. Close the other process before starting CloakBrowse.
+
+The session file is atomically replaced and private to the current user. Its native cache location is selected by `platformdirs`:
+
+- Linux: `~/.cache/cloak-browse`
+- macOS: `~/Library/Caches/cloak-browse`
+- Windows: `%LOCALAPPDATA%\cloak-browse\Cache`
+
+Set `CLOAK_BROWSE_CACHE_DIR` to override that directory. Raw proxy URLs are never stored. Status output contains only a redacted scheme, host, and port.
+
+## Status JSON contract
+
+`cloak-browse status --json` writes exactly one JSON object followed by one newline to stdout. Diagnostics are written to stderr. The current schema version is `1`:
+
+```json
+{
+  "browser": {
+    "cdp_url": "http://127.0.0.1:9333",
+    "owned": null,
+    "state": "stopped",
+    "tabs": null,
+    "version": null,
+    "websocket": false
+  },
+  "daemon": {
+    "name": null,
+    "state": "stopped"
+  },
+  "diagnostics": [],
+  "healthy": false,
+  "schema_version": 1,
+  "session": {
+    "backend": null,
+    "humanize": null,
+    "id": null,
+    "mode": null,
+    "owner_alive": null,
+    "phase": null,
+    "present": false,
+    "profile": null,
+    "proxy": null,
+    "started_at": null,
+    "valid": false
+  },
+  "state": "stopped"
+}
 ```
-cloak-browse start
-  │
-  ├─ cloakbrowser.launch(headless=False, args=["--remote-debugging-port=9333"])
-  │    └─ Downloads + launches patched Chromium with --fingerprint=<random>
-  │
-  └─ browser-harness daemon connects via BU_CDP_URL=http://127.0.0.1:9333
-       └─ CDP session attached, helpers ready
 
-cloak-browse run "..."
-  │
-  └─ Loads browser_harness.helpers into namespace, exec's your code
-       └─ new_tab, goto_url, click_at_xy, js, visible_text, capture_screenshot, ...
+Status exits `0` for `stopped`, `starting`, `running`, and `stopping`. It exits `1` for an invalid session, a stale or orphaned session, a degraded session, or a foreign endpoint on port `9333`.
+
+Other command exit behavior:
+
+- `0`: command completed successfully
+- `1`: operational or lifecycle failure
+- `2`: command-line usage error
+- `124`: `run --timeout` expired
+- other `run` codes: the browser-harness runner's exit code
+
+## Browser helpers
+
+The pinned browser-harness release provides these supported helpers:
+
+`new_tab`, `goto_url`, `page_info`, `js`, `click_at_xy`, `fill_input`, `type_text`, `press_key`, `capture_screenshot`, `wait_for_load`, `wait_for_element`, `list_tabs`, and `switch_tab`.
+
+Use `type_text("text")` for normal text entry. It uses CDP `Input.insertText`. Direct CDP is also available:
+
+```bash
+cloak-browse run "cdp('Input.insertText', text='hello@example.com')"
 ```
 
-## Available helpers
+Use `press_key()` for Enter, Tab, Escape, arrows, and shortcuts. Do not implement text entry with a per-character `press_key()` loop.
 
-Everything from [browser-harness](https://github.com/browser-use/browser-harness) is available in `run` commands:
+CloakBrowser uses stock Playwright and supports authenticated proxies directly. The deprecated `--backend` option remains accepted for command compatibility, but `patchright` is mapped to Playwright with a diagnostic because CloakBrowser removed Patchright support in 0.4.0.
 
-| Helper | What it does |
-|---|---|
-| `new_tab(url)` | Open URL in a new tab |
-| `goto_url(url)` | Navigate current tab |
-| `page_info()` | URL, title, viewport, scroll position |
-| `visible_text()` | Extracted page text |
-| `js(expression)` | Run JavaScript, return result |
-| `click_at_xy(x, y)` | Click at coordinates |
-| `fill_input(selector, text)` | Type into an input |
-| `press_key(key)` | Keyboard input |
-| `capture_screenshot(path)` | Save PNG screenshot |
-| `wait_for_load()` | Wait for page load |
-| `wait_for_element(sel)` | Wait for CSS selector |
-| `list_tabs()` | All open tabs |
-| `switch_tab(id)` | Switch to a tab |
+## Dependency and release policy
 
-## Stealth details
+Runtime dependencies are exact pins in `pyproject.toml`; `uv.lock` is the complete cross-platform resolution. CloakBrowser and Playwright are kept on their current compatible releases. Browser-harness currently requires websockets 15.0.1, so that package remains pinned until browser-harness supports a newer release. Regenerate the lockfile and run all platform and browser integration jobs whenever the tested set changes.
 
-CloakBrowser's patched Chromium applies at the binary level:
+`cloak_browse/_version.py` is the package version source. `scripts/check_release.py` verifies the Hatch version path, changelog, README, and release tag. Before creating `vX.Y.Z`, replace `Unreleased` in the matching changelog heading with an ISO date. The release workflow validates the exact tagged commit before publishing its wheel and sdist.
 
-- `--fingerprint=<seed>` — randomizes canvas, WebGL, audio, font fingerprints
-- `--fingerprint-platform=<os>` — platform spoofing (native on macOS)
-- `--fingerprint-timezone` / `--lang` — set via binary flags, not detectable CDP emulation
-- Strips `--enable-automation` — no `navigator.webdriver = true`
-- Strips `--enable-unsafe-swiftshader` — no detectable software WebGL renderer
-- WebRTC IP spoofing via `--fingerprint-webrtc-ip`
+## Troubleshooting
 
-These work identically in headed and headless mode.
+**Port 9333 is already in use**
+
+Close the process using that port. CloakBrowse will not attach to or terminate it.
+
+**State is `orphaned`**
+
+The foreground owner died while its browser still answered on the recorded CDP browser UUID. Close the browser manually, then run `cloak-browse stop` to clear the stale daemon and session state.
+
+**Daemon startup failed**
+
+The stderr message includes the end of the per-session browser-harness log. Confirm the browser CDP endpoint is WebSocket-ready and retry.
+
+**Session file is corrupt**
+
+`start` moves it to a timestamped `session.corrupt.*.json` file and reports the path. `status --json` reports `invalid_session` without mixing diagnostics into stdout.
 
 ## License
 
